@@ -1,0 +1,26 @@
+[project]
+name = "mojo-noisereduce"
+version = "0.1.0"
+description = "Spectral-gating noise reduction accelerated with Mojo"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Lee Penkman", email = "leepenkman@gmail.com" }]
+keywords = ["mojo", "audio", "noise-reduction", "spectral-gating"]
+dependencies = ["numpy", "scipy", "joblib"]
+
+[project.optional-dependencies]
+dev = ["pytest", "noisereduce==3.0.3"]
+
+[project.urls]
+Homepage = "https://github.com/lee101/mojo-noisereduce"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+
+[tool.setuptools.packages.find]
+where = ["python"]
