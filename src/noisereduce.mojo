@@ -1,10 +1,9 @@
 """Spectral-gating kernels exposed through a C ABI."""
 
-from std.algorithm import sync_parallelize
 from std.math import exp, log10, sqrt
 from std.sys import simd_width_of
 
-comptime Ptr = UnsafePointer[Float64, AnyOrigin[mut=True]]
+comptime Ptr = Pointer[Float64, AnyOrigin[mut=True]]
 comptime EPS = 2.220446049250313e-16
 comptime TASKS = 16
 comptime W = simd_width_of[DType.float64]()
@@ -29,47 +28,45 @@ def stationary_threshold_row(
 ):
     var offset = row * cols
     var vector_stop = cols - cols % W
-    var max_magnitude = magnitude[offset]
+    var max_magnitude = magnitude[unsafe_offset=offset]
     var max_start = 1
     if vector_stop > 0:
-        var maxima = magnitude.load[width=W](offset)
+        var maxima = magnitude.unsafe_load[width=W](offset)
         for col in range(W, vector_stop, W):
-            maxima = max(
-                maxima, magnitude.load[width=W](offset + col)
-            )
+            maxima = max(maxima, magnitude.unsafe_load[width=W](offset + col))
         max_magnitude = maxima.reduce_max()
         max_start = vector_stop
     for col in range(max_start, cols):
-        max_magnitude = max(max_magnitude, magnitude[offset + col])
+        max_magnitude = max(
+            max_magnitude, magnitude[unsafe_offset=offset + col]
+        )
     var max_db = 20.0 * log10(max_magnitude + EPS)
     var floor_db = max_db - 80.0
     var total = 0.0
     for col in range(0, vector_stop, W):
-        var values = (
-            20.0
-            * log10(magnitude.load[width=W](offset + col) + EPS)
+        var values = 20.0 * log10(
+            magnitude.unsafe_load[width=W](offset + col) + EPS
         )
         total += max(values, floor_db).reduce_add()
     for col in range(vector_stop, cols):
-        var value = 20.0 * log10(magnitude[offset + col] + EPS)
+        var value = 20.0 * log10(magnitude[unsafe_offset=offset + col] + EPS)
         total += max(value, floor_db)
     var mean = total / Float64(cols)
     var squared = 0.0
     for col in range(0, vector_stop, W):
-        var values = (
-            20.0
-            * log10(magnitude.load[width=W](offset + col) + EPS)
+        var values = 20.0 * log10(
+            magnitude.unsafe_load[width=W](offset + col) + EPS
         )
         var deltas = max(values, floor_db) - mean
         squared += (deltas * deltas).reduce_add()
     for col in range(vector_stop, cols):
-        var value = 20.0 * log10(magnitude[offset + col] + EPS)
+        var value = 20.0 * log10(magnitude[unsafe_offset=offset + col] + EPS)
         var delta = max(value, floor_db) - mean
         squared += delta * delta
     var deviation = sqrt(squared / Float64(cols))
-    means[row] = mean
-    deviations[row] = deviation
-    thresholds[row] = mean + n_std * deviation
+    means[unsafe_offset=row] = mean
+    deviations[unsafe_offset=row] = deviation
+    thresholds[unsafe_offset=row] = mean + n_std * deviation
 
 
 def stationary_threshold(
@@ -81,7 +78,7 @@ def stationary_threshold(
     cols: Int,
     n_std: Float64,
 ):
-    @parameter
+    @__parameter
     def work(task: Int):
         var tasks = task_count(rows)
         var start = task * rows // tasks
@@ -109,7 +106,8 @@ def stationary_threshold(
                 n_std,
             )
     else:
-        sync_parallelize[work](task_count(rows))
+        for task in range(task_count(rows)):
+            work(task)
 
 
 def stationary_raw_row(
@@ -122,51 +120,44 @@ def stationary_raw_row(
 ):
     var offset = row * cols
     var vector_stop = cols - cols % W
-    var max_magnitude = magnitude[offset]
+    var max_magnitude = magnitude[unsafe_offset=offset]
     var max_start = 1
     if vector_stop > 0:
-        var maxima = magnitude.load[width=W](offset)
+        var maxima = magnitude.unsafe_load[width=W](offset)
         for col in range(W, vector_stop, W):
-            maxima = max(
-                maxima, magnitude.load[width=W](offset + col)
-            )
+            maxima = max(maxima, magnitude.unsafe_load[width=W](offset + col))
         max_magnitude = maxima.reduce_max()
         max_start = vector_stop
     for col in range(max_start, cols):
-        max_magnitude = max(max_magnitude, magnitude[offset + col])
+        max_magnitude = max(
+            max_magnitude, magnitude[unsafe_offset=offset + col]
+        )
     var max_db = 20.0 * log10(max_magnitude + EPS)
     var floor_db = max_db - 80.0
     var residual = 1.0 - prop_decrease
-    if floor_db > thresholds[row]:
+    if floor_db > thresholds[unsafe_offset=row]:
         for col in range(0, vector_stop, W):
-            mask.store(
-                offset + col, SIMD[DType.float64, W](1.0)
-            )
+            mask.unsafe_store(offset + col, SIMD[DType.float64, W](1.0))
         for col in range(vector_stop, cols):
-            mask[offset + col] = 1.0
+            mask[unsafe_offset=offset + col] = 1.0
     else:
         for col in range(0, vector_stop, W):
-            var values = (
-                20.0
-                * log10(
-                    magnitude.load[width=W](offset + col) + EPS
-                )
+            var values = 20.0 * log10(
+                magnitude.unsafe_load[width=W](offset + col) + EPS
             )
-            mask.store(
+            mask.unsafe_store(
                 offset + col,
-                values.gt(thresholds[row]).select(
+                values.gt(thresholds[unsafe_offset=row]).select(
                     SIMD[DType.float64, W](1.0),
                     SIMD[DType.float64, W](residual),
                 ),
             )
         for col in range(vector_stop, cols):
-            var value = (
-                20.0 * log10(magnitude[offset + col] + EPS)
+            var value = 20.0 * log10(
+                magnitude[unsafe_offset=offset + col] + EPS
             )
-            mask[offset + col] = (
-                1.0
-                if value > thresholds[row]
-                else residual
+            mask[unsafe_offset=offset + col] = (
+                1.0 if value > thresholds[unsafe_offset=row] else residual
             )
 
 
@@ -178,7 +169,7 @@ def stationary_raw(
     cols: Int,
     prop_decrease: Float64,
 ):
-    @parameter
+    @__parameter
     def work(task: Int):
         var tasks = task_count(rows)
         var start = task * rows // tasks
@@ -194,7 +185,8 @@ def stationary_raw(
                 magnitude, thresholds, mask, row, cols, prop_decrease
             )
     else:
-        sync_parallelize[work](task_count(rows))
+        for task in range(task_count(rows)):
+            work(task)
 
 
 def convolve_frequency_row(
@@ -214,20 +206,20 @@ def convolve_frequency_row(
             var source_row = row + kernel_row - radius
             if source_row >= 0 and source_row < rows:
                 total += (
-                    source.load[width=W](source_row * cols + col)
-                    * freq_weights[kernel_row]
+                    source.unsafe_load[width=W](source_row * cols + col)
+                    * freq_weights[unsafe_offset=kernel_row]
                 )
-        destination.store(row * cols + col, total)
+        destination.unsafe_store(row * cols + col, total)
     for col in range(vector_stop, cols):
         var total = 0.0
         for kernel_row in range(freq_len):
             var source_row = row + kernel_row - radius
             if source_row >= 0 and source_row < rows:
                 total += (
-                    source[source_row * cols + col]
-                    * freq_weights[kernel_row]
+                    source[unsafe_offset=source_row * cols + col]
+                    * freq_weights[unsafe_offset=kernel_row]
                 )
-        destination[row * cols + col] = total
+        destination[unsafe_offset=row * cols + col] = total
 
 
 def convolve_frequency(
@@ -238,7 +230,7 @@ def convolve_frequency(
     cols: Int,
     freq_len: Int,
 ):
-    @parameter
+    @__parameter
     def work(task: Int):
         var tasks = task_count(rows)
         var start = task * rows // tasks
@@ -266,7 +258,8 @@ def convolve_frequency(
                 freq_len,
             )
     else:
-        sync_parallelize[work](task_count(rows))
+        for task in range(task_count(rows)):
+            work(task)
 
 
 def convolve_time_row(
@@ -283,37 +276,29 @@ def convolve_time_row(
     var offset = row * cols
     var residual = 1.0 - prop_decrease
     var interior_stop = cols - (time_len - radius - 1)
-    var vector_stop = (
-        radius + max(interior_stop - radius, 0) // W * W
-    )
+    var vector_stop = radius + max(interior_stop - radius, 0) // W * W
     for col in range(min(radius, cols)):
         var total = 0.0
         for kernel_col in range(time_len):
             var source_col = col + kernel_col - radius
             if source_col >= 0 and source_col < cols:
                 total += (
-                    source[offset + source_col]
-                    * time_weights[kernel_col]
+                    source[unsafe_offset=offset + source_col]
+                    * time_weights[unsafe_offset=kernel_col]
                 )
-        destination[offset + col] = (
+        destination[unsafe_offset=offset + col] = (
             total * prop_decrease + residual if blend else total
         )
     for col in range(radius, vector_stop, W):
         var total = SIMD[DType.float64, W](0.0)
         for kernel_col in range(time_len):
             total += (
-                source.load[width=W](
-                    offset + col + kernel_col - radius
-                )
-                * time_weights[kernel_col]
+                source.unsafe_load[width=W](offset + col + kernel_col - radius)
+                * time_weights[unsafe_offset=kernel_col]
             )
-        destination.store(
+        destination.unsafe_store(
             offset + col,
-            (
-                total * prop_decrease + residual
-                if blend
-                else total
-            ),
+            (total * prop_decrease + residual if blend else total),
         )
     for col in range(vector_stop, cols):
         var total = 0.0
@@ -321,10 +306,10 @@ def convolve_time_row(
             var source_col = col + kernel_col - radius
             if source_col >= 0 and source_col < cols:
                 total += (
-                    source[offset + source_col]
-                    * time_weights[kernel_col]
+                    source[unsafe_offset=offset + source_col]
+                    * time_weights[unsafe_offset=kernel_col]
                 )
-        destination[offset + col] = (
+        destination[unsafe_offset=offset + col] = (
             total * prop_decrease + residual if blend else total
         )
 
@@ -339,7 +324,7 @@ def convolve_time(
     prop_decrease: Float64,
     blend: Bool,
 ):
-    @parameter
+    @__parameter
     def work(task: Int):
         var tasks = task_count(rows)
         var start = task * rows // tasks
@@ -369,7 +354,8 @@ def convolve_time(
                 blend,
             )
     else:
-        sync_parallelize[work](task_count(rows))
+        for task in range(task_count(rows)):
+            work(task)
 
 
 def nonstationary_raw_row(
@@ -383,39 +369,35 @@ def nonstationary_raw_row(
     slope: Float64,
 ):
     var offset = row * cols
-    smooth[offset] = magnitude[offset]
+    smooth[unsafe_offset=offset] = magnitude[unsafe_offset=offset]
     for col in range(1, cols):
-        smooth[offset + col] = (
-            coefficient * magnitude[offset + col]
-            + (1.0 - coefficient) * smooth[offset + col - 1]
+        smooth[unsafe_offset=offset + col] = (
+            coefficient * magnitude[unsafe_offset=offset + col]
+            + (1.0 - coefficient) * smooth[unsafe_offset=offset + col - 1]
         )
     for reverse_col in range(cols - 1):
         var col = cols - 2 - reverse_col
-        smooth[offset + col] = (
-            coefficient * smooth[offset + col]
-            + (1.0 - coefficient) * smooth[offset + col + 1]
+        smooth[unsafe_offset=offset + col] = (
+            coefficient * smooth[unsafe_offset=offset + col]
+            + (1.0 - coefficient) * smooth[unsafe_offset=offset + col + 1]
         )
     var vector_stop = cols - cols % W
     for col in range(0, vector_stop, W):
-        var smooth_values = smooth.load[width=W](offset + col)
+        var smooth_values = smooth.unsafe_load[width=W](offset + col)
         var above = (
-            (
-                magnitude.load[width=W](offset + col)
-                - smooth_values
-            )
-            / smooth_values
-        )
-        mask.store(
+            magnitude.unsafe_load[width=W](offset + col) - smooth_values
+        ) / smooth_values
+        mask.unsafe_store(
             offset + col,
             1.0 / (1.0 + exp(-(above - threshold) * slope)),
         )
     for col in range(vector_stop, cols):
         var above = (
-            (magnitude[offset + col] - smooth[offset + col])
-            / smooth[offset + col]
-        )
-        mask[offset + col] = (
-            1.0 / (1.0 + exp(-(above - threshold) * slope))
+            magnitude[unsafe_offset=offset + col]
+            - smooth[unsafe_offset=offset + col]
+        ) / smooth[unsafe_offset=offset + col]
+        mask[unsafe_offset=offset + col] = 1.0 / (
+            1.0 + exp(-(above - threshold) * slope)
         )
 
 
@@ -429,7 +411,7 @@ def nonstationary_raw(
     threshold: Float64,
     slope: Float64,
 ):
-    @parameter
+    @__parameter
     def work(task: Int):
         var tasks = task_count(rows)
         var start = task * rows // tasks
@@ -459,7 +441,8 @@ def nonstationary_raw(
                 slope,
             )
     else:
-        sync_parallelize[work](task_count(rows))
+        for task in range(task_count(rows)):
+            work(task)
 
 
 @export("mnr_stationary_threshold")
