@@ -101,6 +101,18 @@ def test_simd_tail_and_parallel_threshold_paths_match_upstream():
     assert np.allclose(actual, expected, atol=5e-15)
 
 
+@pytest.mark.parametrize("cols", [507, 509])
+def test_stationary_statistics_parallel_boundary_with_simd_tail(cols):
+    magnitude = np.abs(RNG.normal(size=(129, cols))) + 1e-8
+    db = _amp_to_db(magnitude)
+    mean, deviation, threshold = stationary_statistics(magnitude, 1.3)
+    assert np.allclose(mean, db.mean(axis=1), atol=2e-14)
+    assert np.allclose(deviation, db.std(axis=1), atol=2e-14)
+    assert np.allclose(
+        threshold, db.mean(axis=1) + 1.3 * db.std(axis=1), atol=3e-14
+    )
+
+
 def test_float64_c_contiguous_input_stays_zero_copy():
     values = np.empty((17, 19), dtype=np.float64, order="C")
     assert f64(values) is values

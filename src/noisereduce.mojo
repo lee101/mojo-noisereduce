@@ -1,5 +1,6 @@
 """Spectral-gating kernels exposed through a C ABI."""
 
+from max.algorithm import sync_parallelize
 from std.math import exp, log10, sqrt
 from std.sys import simd_width_of
 
@@ -106,8 +107,7 @@ def stationary_threshold(
                 n_std,
             )
     else:
-        for task in range(task_count(rows)):
-            work(task)
+        sync_parallelize[work](task_count(rows))
 
 
 def stationary_raw_row(

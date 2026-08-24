@@ -37,8 +37,9 @@ implementation is not the valuable part of this port.
 
 ## Install
 
-The repository pins the tested Mojo nightly and declares Python, NumPy, SciPy,
-joblib, pytest, and upstream noisereduce through Pixi:
+The repository pins matching Mojo and MAX nightlies (MAX supplies the CPU task
+scheduler) and declares Python, NumPy, SciPy, joblib, pytest, and upstream
+noisereduce through Pixi:
 
 ```bash
 pixi install
@@ -94,15 +95,19 @@ threshold masks. The nonstationary kernel applies the same forward-backward
 one-pole filter and sigmoid as upstream. Both paths smooth the mask as two
 zero-padded one-dimensional convolutions, equivalent to upstream's separable
 triangular 2-D filter. Contiguous columns are processed at the native float64
-SIMD width, with scalar tails for remainders and boundary samples. Independent
-frequency rows use up to 16 workers only when the problem exceeds a
-kernel-specific 65,536-operation threshold. Python then applies the mask to the
-complex STFT and calls SciPy's inverse STFT.
+SIMD width, with scalar tails for remainders and boundary samples. Stationary
+statistics use up to 16 workers for independent frequency rows only when the
+input reaches 65,536 elements; smaller inputs stay serial to avoid scheduler
+overhead. Python then applies the mask to the complex STFT and calls SciPy's
+inverse STFT.
 
-No GPU path is included. The separable smoothing passes are about 0.25
-flop/byte, while the other stages contain row reductions or serial
-forward-backward recurrences; none offers enough full-kernel arithmetic
-intensity and independent work to repay host/device transfers. Passing a GPU
+No GPU path is included. Stationary statistics is the only stage with enough
+arithmetic intensity to qualify because it evaluates `log10` twice per element,
+but the pinned Mojo toolchain has no device Float64 `log10` implementation and
+its native LLVM intrinsic cannot be lowered for NVPTX. An approximation would
+break the existing parity tolerances. The separable smoothing passes are about
+0.25 flop/byte and the nonstationary filter contains serial forward-backward
+recurrences, so those stages cannot repay host/device transfers. Passing a GPU
 device name therefore continues to use the CPU backend.
 
 ## Correctness
@@ -127,11 +132,11 @@ formulas used by upstream; the final rows call each package's public
 
 | case | mojo-noisereduce | upstream | upstream / Mojo |
 |---|---:|---:|---:|
-| stationary statistics (513 x 4000) | 27.85 ms | 115.44 ms | 4.14x |
-| stationary mask (513 x 4000) | 70.70 ms | 355.06 ms | 5.02x |
-| nonstationary mask (513 x 4000) | 34.18 ms | 284.60 ms | 8.33x |
-| reduce_noise nonstationary (20 s) | 239.74 ms | 314.67 ms | 1.31x |
-| reduce_noise stationary (20 s) | 227.22 ms | 385.14 ms | 1.70x |
+| stationary statistics (513 x 4000) | 16.11 ms | 55.54 ms | 3.45x |
+| stationary mask (513 x 4000) | 56.39 ms | 195.51 ms | 3.47x |
+| nonstationary mask (513 x 4000) | 61.03 ms | 289.98 ms | 4.75x |
+| reduce_noise nonstationary (20 s) | 170.76 ms | 260.37 ms | 1.52x |
+| reduce_noise stationary (20 s) | 180.55 ms | 240.26 ms | 1.33x |
 
 Results vary with FFT libraries, CPU topology, signal length, and smoothing
 widths. Run `pixi run bench` on the target machine rather than treating these
